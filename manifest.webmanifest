@@ -1,0 +1,1 @@
+{"name":"MyJourney – Reiseplaner","short_name":"MyJourney","description":"Deine Reisen, Buchungen und Tagespläne an einem Ort","start_url":"./","scope":"./","display":"standalone","background_color":"#f6f6f1","theme_color":"#153f3b","lang":"de","icons":[{"src":"./icons/icon.svg","sizes":"any","type":"image/svg+xml","purpose":"any maskable"}]}
