@@ -1,34 +1,38 @@
 
+/* MyJourney – Outlook-Verbindung */
+
 (() => {
+  const CONFIG = window.MYJOURNEY_CONFIG || {};
+
   const FUNCTION_URL =
     "https://appdqolpwvjktltvtqvj.supabase.co/functions/v1/outlook-connect";
 
-  const CONFIG = window.MYJOURNEY_CONFIG;
-
-  if (!CONFIG?.url || !CONFIG?.publishableKey || !window.supabase) {
-    console.error("Outlook: Supabase-Konfiguration fehlt.");
+  if (
+    !CONFIG.url ||
+    !CONFIG.publishableKey ||
+    !window.supabase?.createClient
+  ) {
+    console.error("Outlook: Supabase ist nicht verfügbar.");
     return;
   }
 
+  // Dieselbe Supabase-Konfiguration wie in cloud.js.
+  // Keinen abweichenden storageKey verwenden.
   const client = window.supabase.createClient(
     CONFIG.url,
     CONFIG.publishableKey,
     {
       auth: {
-        storageKey: "myjourney-auth-token"
+        persistSession: true,
+        autoRefreshToken: true,
+        detectSessionInUrl: true
       }
     }
   );
 
   let connecting = false;
 
-  document.addEventListener("click", async (event) => {
-    const button = event.target.closest("#connectOutlook");
-    if (!button) return;
-
-    // Der bestehende app.js-Button zeigt sonst nur einen Hinweis.
-    // Deshalb verhindern wir hier dessen bisherige Aktion nicht
-    // durch Änderung der app.js, sondern ergänzen die Verbindung.
+  async function connectOutlook(button) {
     if (connecting) return;
 
     connecting = true;
@@ -58,45 +62,63 @@
 
       if (!response.ok || !result.authorizationUrl) {
         throw new Error(
-          result.error || "Microsoft-Anmeldung konnte nicht gestartet werden."
+          result.error ||
+          "Die Microsoft-Anmeldung konnte nicht gestartet werden."
         );
       }
 
+      // Microsoft-Anmeldung öffnen.
       window.location.assign(result.authorizationUrl);
+
     } catch (error) {
       alert(
         "Outlook-Verbindung fehlgeschlagen:\n" +
         (error.message || "Unbekannter Fehler")
       );
+
       button.disabled = false;
       button.textContent = "✉️ Outlook verbinden";
       connecting = false;
     }
+  }
+
+  // Capture-Phase: Verhindert, dass der alte
+  // Hinweis aus app.js zusätzlich erscheint.
+  document.addEventListener("click", (event) => {
+    const button = event.target.closest?.("#connectOutlook");
+
+    if (!button) return;
+
+    event.preventDefault();
+    event.stopPropagation();
+
+    void connectOutlook(button);
   }, true);
 
+  // Ergebnis nach der Microsoft-Anmeldung anzeigen.
   const params = new URLSearchParams(window.location.search);
   const status = params.get("outlook");
 
-  if (status) {
-    const messages = {
-      connected: "Dein Outlook-Konto wurde erfolgreich verbunden! 🎉",
-      cancelled: "Die Outlook-Anmeldung wurde abgebrochen.",
-      expired: "Die Outlook-Anmeldung ist abgelaufen. Bitte versuche es erneut.",
-      error: "Die Outlook-Verbindung konnte nicht abgeschlossen werden."
-    };
+  const messages = {
+    connected: "🎉 Dein Outlook-Konto wurde erfolgreich verbunden!",
+    cancelled: "Die Outlook-Anmeldung wurde abgebrochen.",
+    expired: "Die Outlook-Anmeldung ist abgelaufen. Bitte versuche es erneut.",
+    error: "Die Outlook-Verbindung konnte nicht abgeschlossen werden."
+  };
 
-    if (messages[status]) {
-      alert(messages[status]);
-    }
+  if (status && messages[status]) {
+    alert(messages[status]);
 
     params.delete("outlook");
 
     const remaining = params.toString();
-    const cleanUrl =
+
+    window.history.replaceState(
+      {},
+      "",
       window.location.pathname +
       (remaining ? "?" + remaining : "") +
-      window.location.hash;
-
-    window.history.replaceState({}, "", cleanUrl);
+      window.location.hash
+    );
   }
 })();
