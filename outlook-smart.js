@@ -1,17 +1,12 @@
 
-/* MyJourney: Ein-Klick-Zuordnung.
-   Nach outlook.js und cloud.js laden. */
-
+/* MyJourney – Outlook-Reisezuordnung */
 (() => {
   const CONFIG = window.MYJOURNEY_CONFIG || {};
-  const URL =
-    "https://appdqolpwvjktltvtqvj.supabase.co/functions/v1/outlook-import";
+  const URL = CONFIG.url + "/functions/v1/outlook-import";
 
-  if (
-    !window.supabase?.createClient ||
-    !CONFIG.url ||
-    !CONFIG.publishableKey
-  ) return;
+  if (!window.supabase?.createClient ||
+      !CONFIG.url ||
+      !CONFIG.publishableKey) return;
 
   const client = window.supabase.createClient(
     CONFIG.url,
@@ -34,11 +29,10 @@
     return x;
   };
 
-  const btn = (text, fn) => {
+  const btn = (text, fn, primary = false) => {
     const x = el("button", text);
     x.type = "button";
-    x.className = "secondary";
-    x.style.margin = "4px";
+    x.className = primary ? "primary" : "secondary";
     x.addEventListener("click", fn);
     return x;
   };
@@ -55,8 +49,7 @@
       headers: {
         "Content-Type": "application/json",
         apikey: CONFIG.publishableKey,
-        Authorization:
-          "Bearer " + data.session.access_token
+        Authorization: "Bearer " + data.session.access_token
       },
       body: JSON.stringify({ action, ...extra })
     });
@@ -71,47 +64,51 @@
   }
 
   function tripMatch(d) {
-    const trips = state.trips || [];
-    const destination =
-      (d.destination || "").toLocaleLowerCase("de");
+    const destination = String(
+      d.destination || ""
+    ).toLocaleLowerCase("de").trim();
 
     const date = d.start?.slice(0, 10) || "";
 
-    const scored = trips.map(t => {
+    const scored = state.trips.map(t => {
       const words = [t.destination, t.name]
         .join(" ")
         .toLocaleLowerCase("de");
 
-      const place =
-        destination && words.includes(destination);
+      const place = destination &&
+        words.includes(destination);
 
-      const overlap =
-        date &&
+      const overlap = date &&
         t.start &&
         t.end &&
         date >= t.start.slice(0, 10) &&
         date <= t.end.slice(0, 10);
 
       return {
-        t,
+        trip: t,
         score: (place ? 3 : 0) + (overlap ? 2 : 0)
       };
-    }).sort((a, b) => b.score - a.score);
+    });
+
+    scored.sort((a, b) => b.score - a.score);
 
     return scored[0]?.score >= 2
-      ? scored[0].t
+      ? scored[0].trip
       : null;
   }
 
   function makeItem(c, tripId) {
     const d = c.details || {};
-    const start = d.start || "";
 
-    if (!start) {
+    if (!d.start) {
       throw Error(
-        "Es fehlt ein Reisedatum. Bitte diese Buchung später manuell ergänzen."
+        "Es fehlt ein eindeutiges Reisedatum."
       );
     }
+
+    const type = c.booking_type === "transport"
+      ? "transfer"
+      : c.booking_type;
 
     const allowed = [
       "flight",
@@ -121,36 +118,29 @@
       "other"
     ];
 
-    const type =
-      c.booking_type === "transport"
-        ? "transfer"
-        : c.booking_type;
-
     return {
       id: crypto.randomUUID(),
       tripId,
       type: allowed.includes(type) ? type : "other",
       title: d.title || c.subject || "Outlook-Buchung",
-      start,
+      start: d.start,
       end: d.end || "",
       location: d.destination || "",
       address: "",
       lat: null,
       lng: null,
       confirmation: d.confirmation || "",
-      cost:
-        typeof d.cost_eur === "number"
-          ? d.cost_eur
-          : 0,
+      cost: typeof d.cost_eur === "number"
+        ? d.cost_eur
+        : 0,
       notes: [
-        `Outlook: ${c.sender || ""}`,
-        d.currency && d.amount != null
+        "Outlook: " + (c.sender || ""),
+        d.amount != null && d.currency
           ? `Originalpreis: ${d.amount} ${d.currency}`
           : "",
         d.cost_eur == null
-          ? "Preis nicht eindeutig erkannt – bitte prüfen."
-          : "",
-        c.preview || ""
+          ? "Preis bitte manuell überprüfen."
+          : ""
       ].filter(Boolean).join("\n"),
       source: "outlook",
       outlookMessageId: c.microsoft_message_id
@@ -158,12 +148,12 @@
   }
 
   async function assign(c, trip) {
-    if (
-      state.items.some(
-        i => i.outlookMessageId === c.microsoft_message_id
-      )
-    ) {
-      alert("Diese Buchung ist bereits übernommen.");
+    const duplicate = state.items.some(
+      i => i.outlookMessageId === c.microsoft_message_id
+    );
+
+    if (duplicate) {
+      alert("Diese Buchung wurde bereits übernommen.");
       return;
     }
 
@@ -180,15 +170,16 @@
     save();
     render();
 
-    await api("review", {
-      id: c.id,
-      status: "accepted"
-    });
+    try {
+      await api("review", {
+        id: c.id,
+        status: "accepted"
+      });
+    } catch (e) {
+      console.warn("Outlook-Status:", e);
+    }
 
-    alert(
-      'Buchung zu „' + trip.name + '“ hinzugefügt.'
-    );
-
+    alert(`Buchung zu „${trip.name}“ hinzugefügt.`);
     await show();
   }
 
@@ -196,28 +187,27 @@
     const d = c.details || {};
 
     if (!d.start) {
-      alert(
-        "Kein eindeutiges Reisedatum erkannt. Bitte zuerst manuell prüfen."
-      );
+      alert("Kein eindeutiges Reisedatum erkannt.");
       return;
     }
 
     const name = prompt(
-      "Wie soll die neue Reise heißen?",
+      "Wie soll deine neue Reise heißen?",
       d.destination || "Neue Reise"
     );
 
     if (!name?.trim()) return;
 
     const start = d.start.slice(0, 10);
-    const end = (d.end || d.start).slice(0, 10);
+    const proposedEnd = (d.end || d.start).slice(0, 10);
+    const end = proposedEnd >= start ? proposedEnd : start;
 
     const trip = {
       id: crypto.randomUUID(),
       name: name.trim(),
       destination: d.destination || name.trim(),
       start,
-      end: end >= start ? end : start
+      end
     };
 
     let item;
@@ -236,39 +226,41 @@
     save();
     render();
 
-    await api("review", {
-      id: c.id,
-      status: "accepted"
-    });
+    try {
+      await api("review", {
+        id: c.id,
+        status: "accepted"
+      });
+    } catch (e) {
+      console.warn("Outlook-Status:", e);
+    }
 
-    alert(
-      'Reise „' + trip.name +
-      '“ angelegt und Buchung übernommen.'
-    );
-
+    alert(`Reise „${trip.name}“ wurde erstellt.`);
     await show();
   }
 
-  function addSelect(c, wrap) {
-    const sel = el("select");
-    sel.style.maxWidth = "100%";
+  function addTripSelector(c, card) {
+    const select = el("select");
+    select.style.width = "100%";
+    select.style.marginBottom = "8px";
 
-    for (const t of state.trips) {
-      const opt = el("option", t.name);
-      opt.value = t.id;
-      sel.append(opt);
+    for (const trip of state.trips) {
+      const option = el("option", trip.name);
+      option.value = trip.id;
+      select.append(option);
     }
 
-    wrap.append(
-      sel,
+    card.append(select);
+
+    card.append(
       btn("Dieser Reise zuordnen", () => {
-        const t = state.trips.find(
-          x => x.id === sel.value
+        const trip = state.trips.find(
+          t => t.id === select.value
         );
 
-        if (t) {
-          void assign(c, t).catch(
-            err => alert(err.message)
+        if (trip) {
+          void assign(c, trip).catch(
+            e => alert(e.message)
           );
         }
       })
@@ -276,111 +268,121 @@
   }
 
   async function show() {
-    const target =
-      document.querySelector("#outlookSmartResults");
+    const target = document.querySelector(
+      "#outlookSmartResults"
+    );
 
     if (!target) return;
 
     target.replaceChildren(
-      el("p", "Buchungsvorschläge werden geladen …")
+      el("p", "Reisevorschläge werden geladen …")
     );
 
     try {
       const data = await api("list");
 
-      target.replaceChildren();
-
       const candidates = (data.items || [])
         .filter(c => c.status === "new");
 
-      target.append(
-        el(
-          "h4",
-          `Noch zu prüfen: ${candidates.length} (von ${data.total || 0} Treffern)`
-        )
-      );
+      target.replaceChildren();
 
       if (!candidates.length) {
         target.append(
-          el(
-            "p",
-            "Keine offenen Vorschläge in den zuletzt geladenen Treffern."
-          )
+          el("p", "Aktuell keine offenen Reisevorschläge.")
         );
         return;
       }
+
+      target.append(
+        el("h4", `${candidates.length} Buchungen prüfen`)
+      );
 
       for (const c of candidates) {
         const d = c.details || {};
         const card = el("article");
 
         card.className = "card";
-        card.style.margin = "10px 0";
+        card.style.margin = "12px 0";
+        card.style.padding = "18px";
+        card.style.borderRadius = "16px";
 
-        const symbol =
-          c.booking_type === "flight"
-            ? "✈️"
-            : c.booking_type === "hotel"
-              ? "🏨"
-              : "📩";
+        const icon = c.booking_type === "flight"
+          ? "✈️"
+          : c.booking_type === "hotel"
+            ? "🏨"
+            : c.booking_type === "transport"
+              ? "🚆"
+              : "🎟️";
 
-        card.append(
-          el(
-            "strong",
-            `${symbol} ${d.title || c.subject}`
-          )
+        const heading = el(
+          "h3",
+          `${icon} ${d.title || c.subject}`
         );
 
+        heading.style.marginTop = "0";
+        card.append(heading);
+
+        const details = [
+          d.destination,
+          d.start,
+          d.end && d.end !== d.start
+            ? "bis " + d.end
+            : ""
+        ].filter(Boolean).join(" · ");
+
         card.append(
-          el(
-            "p",
-            [
-              d.destination,
-              d.start,
-              d.end && d.end !== d.start
-                ? "bis " + d.end
-                : ""
-            ].filter(Boolean).join(" · ") ||
-              "Reisedaten noch unklar"
-          )
+          el("p", details || "Reisedaten noch unklar")
         );
 
-        const cost =
-          d.cost_eur != null
-            ? `${d.cost_eur.toFixed(2)} €`
-            : d.amount != null
-              ? `${d.amount} ${d.currency} (nicht in EUR umgerechnet)`
-              : "Preis nicht erkannt";
+        let price = "Preis nicht erkannt";
 
-        card.append(el("p", cost));
+        if (typeof d.cost_eur === "number") {
+          price = d.cost_eur.toLocaleString(
+            "de-DE",
+            {
+              style: "currency",
+              currency: "EUR"
+            }
+          );
+        } else if (d.amount != null) {
+          price = `${d.amount} ${d.currency || ""}`;
+        }
+
+        const priceLine = el("p", price);
+        priceLine.style.fontWeight = "600";
+        card.append(priceLine);
 
         if (!c.analyzed_at) {
-          card.append(
-            el("p", "Noch nicht im Detail analysiert.")
+          const note = el(
+            "p",
+            "Buchungsdetails noch nicht analysiert."
           );
+          note.className = "muted";
+          card.append(note);
         }
 
         const match = tripMatch(d);
 
         if (match) {
-          card.append(
-            el(
-              "p",
-              `💡 Vorschlag: gehört zu „${match.name}“`
-            )
+          const suggestion = el(
+            "p",
+            `💡 Passt vermutlich zu „${match.name}“`
           );
+
+          card.append(suggestion);
 
           card.append(
             btn(
-              "✓ Mit einem Klick hinzufügen",
+              "✓ Zu dieser Reise hinzufügen",
               () => void assign(c, match)
-                .catch(e => alert(e.message))
+                .catch(e => alert(e.message)),
+              true
             )
           );
         }
 
         if (state.trips.length) {
-          addSelect(c, card);
+          addTripSelector(c, card);
         }
 
         card.append(
@@ -392,20 +394,18 @@
         );
 
         card.append(
-          btn(
-            "Ignorieren",
-            async () => {
-              try {
-                await api("review", {
-                  id: c.id,
-                  status: "ignored"
-                });
-                await show();
-              } catch (e) {
-                alert(e.message);
-              }
+          btn("Ignorieren", async () => {
+            try {
+              await api("review", {
+                id: c.id,
+                status: "ignored"
+              });
+
+              await show();
+            } catch (e) {
+              alert(e.message);
             }
-          )
+          })
         );
 
         target.append(card);
@@ -423,31 +423,33 @@
 
     busy = true;
 
-    const b =
-      document.querySelector("#outlookAnalyzeButton");
+    const button = document.querySelector(
+      "#outlookAnalyzeButton"
+    );
 
-    if (b) b.disabled = true;
+    if (button) button.disabled = true;
 
     try {
-      let n = 0;
+      let count = 0;
 
       for (let i = 0; i < 10; i++) {
-        const r = await api("analyze");
+        const result = await api("analyze");
 
-        n += r.analyzed || 0;
+        count += result.analyzed || 0;
 
-        const s =
-          document.querySelector("#outlookSmartProgress");
+        const progress = document.querySelector(
+          "#outlookSmartProgress"
+        );
 
-        if (s) {
-          s.textContent =
-            `${n} E-Mails im Detail geprüft. ` +
-            (r.remaining === 0
+        if (progress) {
+          progress.textContent =
+            `${count} E-Mails analysiert. ` +
+            (result.remaining === 0
               ? "Fertig."
               : "Weitere folgen …");
         }
 
-        if (!r.analyzed || r.remaining === 0) {
+        if (!result.analyzed || result.remaining === 0) {
           break;
         }
       }
@@ -455,20 +457,18 @@
       await show();
 
     } catch (e) {
-      alert(
-        "Analyse fehlgeschlagen: " + e.message
-      );
+      alert("Analyse fehlgeschlagen: " + e.message);
 
     } finally {
       busy = false;
-
-      if (b) b.disabled = false;
+      if (button) button.disabled = false;
     }
   }
 
   function mount() {
-    const panel =
-      document.querySelector("#outlookImportPanel");
+    const panel = document.querySelector(
+      "#outlookImportPanel"
+    );
 
     if (!panel || panel === lastPanel) return;
 
@@ -476,38 +476,38 @@
 
     const wrap = el("section");
     wrap.id = "outlookSmart";
-    wrap.style.marginTop = "18px";
+    wrap.style.marginTop = "20px";
 
     wrap.append(
-      el("h3", "✨ Reisezuordnung mit einem Klick")
+      el("h3", "✨ Deine Reisevorschläge")
     );
 
     wrap.append(
       el(
         "p",
-        "Zuerst E-Mails scannen, dann Buchungsdetails auswerten. Unklare Angaben bitte prüfen."
+        "Erkannte Buchungen prüfen und mit einem Klick deiner Reise hinzufügen."
       )
     );
 
     const analyzeButton = btn(
-      "Buchungsdetails & Preise auslesen",
-      () => void analyze()
+      "🔎 Buchungsdetails auslesen",
+      () => void analyze(),
+      true
     );
 
     analyzeButton.id = "outlookAnalyzeButton";
-
     wrap.append(analyzeButton);
 
     wrap.append(
       btn(
-        "Vorschläge aktualisieren",
+        "↻ Vorschläge aktualisieren",
         () => void show()
       )
     );
 
-    const p = el("p");
-    p.id = "outlookSmartProgress";
-    wrap.append(p);
+    const progress = el("p");
+    progress.id = "outlookSmartProgress";
+    wrap.append(progress);
 
     const results = el("div");
     results.id = "outlookSmartResults";
