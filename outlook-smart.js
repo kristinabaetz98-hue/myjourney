@@ -4,9 +4,11 @@
   const CONFIG = window.MYJOURNEY_CONFIG || {};
   const URL = CONFIG.url + "/functions/v1/outlook-import";
 
-  if (!window.supabase?.createClient ||
-      !CONFIG.url ||
-      !CONFIG.publishableKey) return;
+  if (
+    !window.supabase?.createClient ||
+    !CONFIG.url ||
+    !CONFIG.publishableKey
+  ) return;
 
   const client = window.supabase.createClient(
     CONFIG.url,
@@ -56,10 +58,7 @@
 
     const j = await r.json().catch(() => ({}));
 
-    if (!r.ok) {
-      throw Error(j.error || "Serverfehler");
-    }
-
+    if (!r.ok) throw Error(j.error || "Serverfehler");
     return j;
   }
 
@@ -101,9 +100,7 @@
     const d = c.details || {};
 
     if (!d.start) {
-      throw Error(
-        "Es fehlt ein eindeutiges Reisedatum."
-      );
+      throw Error("Es fehlt ein eindeutiges Reisedatum.");
     }
 
     const type = c.booking_type === "transport"
@@ -364,12 +361,12 @@
         const match = tripMatch(d);
 
         if (match) {
-          const suggestion = el(
-            "p",
-            `💡 Passt vermutlich zu „${match.name}“`
+          card.append(
+            el(
+              "p",
+              `💡 Passt vermutlich zu „${match.name}“`
+            )
           );
-
-          card.append(suggestion);
 
           card.append(
             btn(
@@ -512,6 +509,29 @@
     const results = el("div");
     results.id = "outlookSmartResults";
     wrap.append(results);
+
+    // Neue Bereinigungsfunktion
+    wrap.append(
+      btn(
+        "🧹 Alte Vorschläge bereinigen",
+        async () => {
+          if (!confirm(
+            "Alle noch nicht übernommenen Outlook-Vorschläge entfernen und Scan zurücksetzen?"
+          )) return;
+
+          try {
+            await api("clean_and_rescan");
+            await show();
+
+            alert(
+              "Vorschläge bereinigt. Starte jetzt die Postfachsuche erneut."
+            );
+          } catch (e) {
+            alert("Bereinigung fehlgeschlagen: " + e.message);
+          }
+        }
+      )
+    );
 
     panel.append(wrap);
     void show();
